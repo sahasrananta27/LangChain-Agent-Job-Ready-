@@ -109,7 +109,17 @@ def extract_text_response(agent_output: dict) -> str:
 
     if messages:
         last = messages[-1]
-        return getattr(last, "content", str(last))
+        content = getattr(last, "content", "")
+
+        # If content is a list (thinking + text), return only the text part
+        if isinstance(content, list):
+            texts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    texts.append(item.get("text", ""))
+            return "\n".join(texts)
+
+        return str(content)
 
     return str(agent_output)
 
