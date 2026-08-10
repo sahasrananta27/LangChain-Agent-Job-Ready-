@@ -237,13 +237,16 @@ async def home():
 
 @app.post("/ask")
 async def ask(request: Request):
-    body = await request.json()
+    try:
+        body = await request.json()
+        user_input = body.get("input", "")
 
-    result = formatted_agent_chain.invoke(
-        {"input": body.get("input", "")}
-    )
+        result = formatted_agent_chain.invoke({"input": user_input})
 
-    return {"response": result}
+        return {"response": result}
+
+    except Exception as e:
+        return {"response": f"Error: {str(e)}"}
 
 
 @app.get("/health")
