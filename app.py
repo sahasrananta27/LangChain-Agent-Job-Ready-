@@ -121,7 +121,7 @@ def extract_text_response(agent_output: dict) -> str:
 
         return str(content)
 
-    return str(agent_output)
+    
 
 
 # Build runnable chain
