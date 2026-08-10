@@ -1,131 +1,260 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool
-from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage
 import os
+import uvicorn
+from fastapi import FastAPI
+from langserve import add_routes
 
-# ---------------------------------------------------
-# Configure Gemini API Key
-# Set this in Render -> Environment Variables
-# GOOGLE_API_KEY = your_key
-# ---------------------------------------------------
+from langchain_core.tools import tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_agent
+from langchain_core.runnables import RunnableLambda
+from pydantic import BaseModel, Field
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-    temperature=0.3
 
-)
-
-app = FastAPI(title="Career Placement Agent")
-
-# ---------------------------------------------------
-# Tool 1: Resume Skill Analyzer
-# ---------------------------------------------------
-
+# -----------------------------
+# 1. Define Career Tool
+# -----------------------------
 @tool
-def analyze_resume_skills(resume_text: str) -> str:
+def job_advice(question: str) -> str:
     """
-    Analyze resume text and identify technical skills.
+    Provides job-ready preparation advice based on the user's question.
     """
-    skills = []
 
-    keywords = [
-        "python", "java", "sql", "mysql", "pandas",
-        "numpy", "machine learning", "langchain",
-        "langgraph", "fastapi", "flask", "git",
-        "github", "docker", "api", "javascript"
-    ]
-
-    text = resume_text.lower()
-
-    for k in keywords:
-        if k in text:
-            skills.append(k)
-
-    if not skills:
-        return "No technical skills detected."
-
-    return "Detected skills: " + ", ".join(skills)
-
-# ---------------------------------------------------
-# Tool 2: Job Roadmap Generator
-# ---------------------------------------------------
-
-@tool
-def job_roadmap(role: str) -> str:
-    """
-    Generate a learning roadmap for a target job role.
-    """
-    role = role.lower()
-
-    roadmaps = {
-        "ai engineer": "Python -> Machine Learning -> Deep Learning -> LangChain -> LangGraph -> RAG -> MLOps -> Deployment",
-        "data scientist": "Python -> Statistics -> Pandas -> SQL -> Machine Learning -> Visualization -> Projects",
-        "software engineer": "DSA -> Java/Python -> OOP -> DBMS -> APIs -> GitHub -> System Design",
-        "backend developer": "Python/Java -> FastAPI/Spring -> SQL -> REST APIs -> Authentication -> Deployment"
+    information = {
+        "python": (
+            "Learn Python basics, OOP, data structures, algorithms, "
+            "and build projects using Flask, Django, Pandas, and APIs."
+        ),
+        "java": (
+            "Learn OOP, collections, exception handling, multithreading, "
+            "JDBC, Spring Boot, and practice DSA regularly."
+        ),
+        "dsa": (
+            "Focus on arrays, strings, hashing, stacks, queues, trees, "
+            "graphs, and dynamic programming."
+        ),
+        "interview": (
+            "Prepare DSA, DBMS, OS, CN, projects, resume explanation, "
+            "and behavioral interview questions."
+        ),
+        "resume": (
+            "Highlight projects, technical skills, internships, certifications, "
+            "GitHub links, and measurable achievements."
+        )
     }
 
-    return roadmaps.get(role, "Build strong programming, DBMS, DSA, projects, and deployment skills.")
+    question_lower = question.lower()
 
-# ---------------------------------------------------
-# Tool 3: Interview Question Generator
-# ---------------------------------------------------
+    for key, value in information.items():
+        if key in question_lower:
+            return value
 
-@tool
-def interview_questions(role: str) -> str:
-    """
-    Generate sample interview questions.
-    """
-    prompt = f"""
-    Generate 5 technical interview questions for a {role}.
-    Keep them concise and suitable for campus placements.
-    """
+    return (
+        "Focus on programming fundamentals, DSA, projects, GitHub portfolio, "
+        "and communication skills to become job-ready."
+    )
 
-    response = llm.invoke(prompt)
-    return response.content
 
-# ---------------------------------------------------
-# Create Agent
-# ---------------------------------------------------
+tools = [job_advice]
 
+
+# -----------------------------
+# 2. Initialize Model
+# -----------------------------
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+llm = ChatGoogleGenerativeAI(
+    model="gemma-4-31b-it",
+    google_api_key=GOOGLE_API_KEY,
+    temperature=0.3
+)
+
+
+# -----------------------------
+# 3. Create Agent
+# -----------------------------
 agent = create_agent(
     model=llm,
-    tools=[analyze_resume_skills, job_roadmap, interview_questions],
+    tools=tools,
     system_prompt="""
-You are a professional career placement assistant.
-Help students prepare for internships and placements.
-Use tools whenever appropriate.
-Give concise, actionable answers.
+You are a Job-Ready Career Assistant.
+
+Your responsibilities:
+1. Suggest suitable job roles based on the user's skills.
+2. Answer programming and interview preparation questions.
+3. Use the job_advice tool for career preparation queries.
+4. Provide practical and beginner-friendly guidance.
+5. Recommend next skills to learn and project ideas when useful.
 """
 )
 
-# ---------------------------------------------------
-# Request Model
-# ---------------------------------------------------
 
-class Query(BaseModel):
-    message: str
+# -----------------------------
+# 4. API Input Schema
+# -----------------------------
+class AgentInput(BaseModel):
+    input: str = Field(description="User query")
 
-# ---------------------------------------------------
-# Routes
-# ---------------------------------------------------
 
-@app.get("/")
-def home():
-    return {
-        "message": "Career Placement Agent is running",
-        "docs": "/docs"
-    }
+# -----------------------------
+# 5. Helper Functions
+# -----------------------------
+def format_for_agent(x) -> dict:
+    user_input = x["input"] if isinstance(x, dict) else x.input
+    return {"messages": [("user", user_input)]}
 
-@app.post("/chat")
-def chat(query: Query):
-    result = agent.invoke({
-        "messages": [HumanMessage(content=query.message)]
-    })
 
-    final_message = result["messages"][-1].content
+def extract_text_response(agent_output: dict) -> str:
+    messages = agent_output.get("messages")
 
-    return {"response": final_message}
+    if messages:
+        last = messages[-1]
+        return getattr(last, "content", str(last))
+
+    return str(agent_output)
+
+
+# Build runnable chain
+formatted_agent_chain = (
+    RunnableLambda(format_for_agent)
+    | agent
+    | RunnableLambda(extract_text_response)
+).with_types(input_type=AgentInput, output_type=str)
+
+
+# -----------------------------
+# 6. FastAPI App
+# -----------------------------
+# -----------------------------
+# 6. FastAPI App + Simple UI
+# -----------------------------
+from fastapi.responses import HTMLResponse
+from fastapi import Request
+
+app = FastAPI(title="Job-Ready Career Assistant API")
+
+
+# LangServe API route
+add_routes(
+    app,
+    formatted_agent_chain,
+    path="/agent",
+    playground_type="default"
+)
+
+
+# Simple Web UI
+HTML_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Job-Ready Career Assistant</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            margin: 0;
+            padding: 40px;
+        }
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+        }
+        textarea {
+            width: 100%;
+            height: 120px;
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+        button {
+            margin-top: 12px;
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 14px;
+            background: #eef2ff;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Job-Ready Career Assistant</h1>
+        <p>Ask about job roles, interview preparation, Python, Java, DSA, or resume guidance.</p>
+
+        <textarea id="question" placeholder="Example: What should I learn for a Java SDE interview?"></textarea>
+        <button onclick="askAgent()">Ask Assistant</button>
+
+        <div id="result">Your answer will appear here.</div>
+    </div>
+
+<script>
+async function askAgent() {
+    const question = document.getElementById("question").value;
+
+    const response = await fetch("/ask", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ input: question })
+    });
+
+    const data = await response.json();
+    document.getElementById("result").innerText = data.response;
+}
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTML_PAGE
+
+
+@app.post("/ask")
+async def ask(request: Request):
+    body = await request.json()
+
+    result = formatted_agent_chain.invoke(
+        {"input": body.get("input", "")}
+    )
+
+    return {"response": result}
+
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+
+
+# -----------------------------
+# 7. Run Server
+# -----------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
