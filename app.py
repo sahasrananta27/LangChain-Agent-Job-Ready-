@@ -118,15 +118,32 @@ def format_for_agent(x) -> dict:
 
 
 def extract_text_response(agent_output: dict) -> str:
+    # Find messages
     messages = agent_output.get("messages")
 
-    if messages:
-        last = messages[-1]
-        return getattr(last, "content", str(last))
+    if messages is None:
+        for value in agent_output.values():
+            if isinstance(value, dict) and "messages" in value:
+                messages = value["messages"]
+                break
 
-    return str(agent_output)
+    if not messages:
+        return str(agent_output)
 
+    last = messages[-1]
+    content = getattr(last, "content", "")
 
+    # If content is a list, return only the text parts
+    if isinstance(content, list):
+        text_parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                text_parts.append(item)
+        return "\n".join(text_parts)
+
+    return str(content)
 # Build runnable chain
 formatted_agent_chain = (
     RunnableLambda(format_for_agent)
