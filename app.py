@@ -203,18 +203,47 @@ document.getElementById("askBtn").addEventListener("click", async function () {
             body: JSON.stringify({ input: question })
         });
 
-        const text = await response.text();
-
-        try {
-            const data = JSON.parse(text);
-            document.getElementById("result").innerText =
-                data.response || "No response received.";
-        } catch (e) {
-            document.getElementById("result").innerText =
-                "Server returned: " + text;
-        }
+        const data = await response.json();
+        document.getElementById("result").innerText =
+            data.response || "No response received.";
 
     } catch (err) {
         document.getElementById("result").innerText = "Error: " + err;
     }
 });
+</script>
+</body>
+</html>
+"""
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    return HTML_PAGE
+
+
+@app.post("/ask")
+async def ask(request: Request):
+    try:
+        body = await request.json()
+        user_input = body.get("input", "")
+
+        result = formatted_agent_chain.invoke({"input": user_input})
+
+        return {"response": result}
+
+    except Exception as e:
+        print("ERROR:", e)
+        return {"response": f"Server error: {str(e)}"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+# -----------------------------
+# 8. Run Server
+# -----------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
