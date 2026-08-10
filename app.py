@@ -41,11 +41,11 @@ tools = [job_advice]
 # -----------------------------
 # 2. Initialize Model
 # -----------------------------
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_API_KEY = os.environ.get("Gemini_API_Key")
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    google_api_key=GEMINI_API_KEY,
+    google_api_key=Gemini_API_Key,
     temperature=0.3
 )
 
