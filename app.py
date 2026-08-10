@@ -1,4 +1,3 @@
-
 import os
 import uvicorn
 from fastapi import FastAPI
@@ -79,12 +78,26 @@ agent = create_agent(
     system_prompt="""
 You are a Job-Ready Career Assistant.
 
-Your responsibilities:
-1. Suggest suitable job roles based on the user's skills.
-2. Answer programming and interview preparation questions.
-3. Use the job_advice tool for career preparation queries.
-4. Provide practical and beginner-friendly guidance.
-5. Recommend next skills to learn and project ideas when useful.
+Rules:
+1. Give concise answers (3-8 lines).
+2. When the user asks about job roles after learning a skill, return only:
+   - Suitable job roles
+   - 1-2 important next skills to learn
+3. Do NOT give detailed explanations of each role unless the user explicitly asks.
+4. Use bullet points.
+5. End with one short suggestion such as "Start with a small project in this area."
+
+Example:
+User: What roles can I apply for after learning Python?
+Answer:
+- Python Developer
+- Backend Developer
+- Data Analyst
+- QA Automation Engineer
+- Junior AI/ML Engineer
+
+Next skills: SQL, Git/GitHub, and one framework (FastAPI/Django).
+Suggestion: Start with a small Python project and upload it to GitHub.
 """
 )
 
@@ -109,19 +122,9 @@ def extract_text_response(agent_output: dict) -> str:
 
     if messages:
         last = messages[-1]
-        content = getattr(last, "content", "")
+        return getattr(last, "content", str(last))
 
-        # If content is a list (thinking + text), return only the text part
-        if isinstance(content, list):
-            texts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    texts.append(item.get("text", ""))
-            return "\n".join(texts)
-
-        return str(content)
-
-    
+    return str(agent_output)
 
 
 # Build runnable chain
@@ -218,21 +221,42 @@ HTML_PAGE = """
 
         <div id="result">Your answer will appear here.</div>
     </div>
+    <div id="suggestions"></div>
 
 <script>
-async function askAgent() {
-    const question = document.getElementById("question").value;
+async function askAgent(questionText=null) {
+    const question = questionText || document.getElementById("question").value;
 
     const response = await fetch("/ask", {
         method: "POST",
-        headers: {
-            "Content-Type": "application/json"
-        },
+        headers: {"Content-Type": "application/json"},
         body: JSON.stringify({ input: question })
     });
 
     const data = await response.json();
     document.getElementById("result").innerText = data.response;
+
+    // Simple suggestion buttons
+    const suggestions = [
+        "Give me a Python backend roadmap",
+        "Suggest a beginner Python project",
+        "What skills are needed for a Data Analyst role?"
+    ];
+
+    const container = document.getElementById("suggestions");
+    container.innerHTML = "<h3>You may also ask</h3>";
+
+    suggestions.forEach(text => {
+        const btn = document.createElement("button");
+        btn.innerText = text;
+        btn.style.margin = "6px";
+        btn.onclick = () => {
+            document.getElementById("question").value = text;
+            askAgent(text);
+        };
+        container.appendChild(btn);
+    });
+
 }
 </script>
 </body>
@@ -247,16 +271,13 @@ async def home():
 
 @app.post("/ask")
 async def ask(request: Request):
-    try:
-        body = await request.json()
-        user_input = body.get("input", "")
+    body = await request.json()
 
-        result = formatted_agent_chain.invoke({"input": user_input})
+    result = formatted_agent_chain.invoke(
+        {"input": body.get("input", "")}
+    )
 
-        return {"response": result}
-
-    except Exception as e:
-        return {"response": f"Error: {str(e)}"}
+    return {"response": result}
 
 
 @app.get("/health")
