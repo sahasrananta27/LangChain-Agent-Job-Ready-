@@ -1,3 +1,5 @@
+%%writefile app.py
+
 import os
 import uvicorn
 from fastapi import FastAPI
@@ -60,11 +62,11 @@ tools = [job_advice]
 # -----------------------------
 # 2. Initialize Model
 # -----------------------------
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+Gemini_API_Key = os.environ.get("Gemini_API_Key")
 
 llm = ChatGoogleGenerativeAI(
     model="gemma-4-31b-it",
-    google_api_key=GOOGLE_API_KEY,
+    gemini_api_key=Gemini_API_Key,
     temperature=0.3
 )
 
