@@ -180,105 +180,57 @@ HTML_PAGE = """
 <head>
     <title>Job-Ready Career Assistant</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
-            margin: 0;
-            padding: 40px;
-        }
-        .container {
-            max-width: 700px;
-            margin: auto;
-            background: white;
-            padding: 24px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            text-align: center;
-        }
-        textarea {
-            width: 100%;
-            height: 120px;
-            padding: 10px;
-            font-size: 16px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-        }
-        button {
-            margin-top: 12px;
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
-            border: none;
-            border-radius: 8px;
-            background: #2563eb;
-            color: white;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #1d4ed8;
-        }
-        #result {
-            margin-top: 20px;
-            padding: 14px;
-            background: #eef2ff;
-            border-radius: 8px;
-            white-space: pre-wrap;
-        }
+        body { font-family: Arial; padding: 40px; background: #f4f6f8; }
+        .box { max-width: 700px; margin: auto; background: white; padding: 24px; border-radius: 12px; }
+        textarea { width: 100%; height: 120px; padding: 10px; }
+        button { margin-top: 10px; padding: 10px 16px; cursor: pointer; }
+        #result { margin-top: 20px; padding: 12px; background: #eef2ff; white-space: pre-wrap; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Job-Ready Career Assistant</h1>
-        <p>Ask about job roles, interview preparation, Python, Java, DSA, or resume guidance.</p>
+<div class="box">
+    <h2>Job-Ready Career Assistant</h2>
 
-        <textarea id="question" placeholder="Example: What should I learn for a Java SDE interview?"></textarea>
-        <button onclick="askAgent()">Ask Assistant</button>
+    <textarea id="question" placeholder="Ask a career question"></textarea><br>
 
-        <div id="result">Your answer will appear here.</div>
-    </div>
-    <div id="suggestions"></div>
+    <button id="askBtn">Ask Assistant</button>
+
+    <div id="result">Your answer will appear here.</div>
+</div>
 
 <script>
-async function askAgent(questionText=null) {
-    const question = questionText || document.getElementById("question").value;
+document.getElementById("askBtn").addEventListener("click", async function () {
+    const question = document.getElementById("question").value;
 
-    const response = await fetch("/ask", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ input: question })
-    });
+    if (!question.trim()) {
+        alert("Please enter a question");
+        return;
+    }
 
-    const data = await response.json();
-    document.getElementById("result").innerText = data.response;
+    document.getElementById("result").innerText = "Thinking...";
 
-    // Simple suggestion buttons
-    const suggestions = [
-        "Give me a Python backend roadmap",
-        "Suggest a beginner Python project",
-        "What skills are needed for a Data Analyst role?"
-    ];
+    try {
+        const response = await fetch("/ask", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ input: question })
+        });
 
-    const container = document.getElementById("suggestions");
-    container.innerHTML = "<h3>You may also ask</h3>";
-
-    suggestions.forEach(text => {
-        const btn = document.createElement("button");
-        btn.innerText = text;
-        btn.style.margin = "6px";
-        btn.onclick = () => {
-            document.getElementById("question").value = text;
-            askAgent(text);
-        };
-        container.appendChild(btn);
-    });
-
-}
+        const data = await response.json();
+        document.getElementById("result").innerText = data.response || "No response received.";
+    } catch (err) {
+        document.getElementById("result").innerText = "Error: " + err;
+    }
+});
 </script>
 </body>
 </html>
 """
+   
+
+  
 
 
 @app.get("/", response_class=HTMLResponse)
