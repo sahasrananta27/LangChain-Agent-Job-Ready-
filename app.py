@@ -1,7 +1,6 @@
 import os
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI
 from langserve import add_routes
 
 from langchain_core.tools import tool
@@ -16,14 +15,31 @@ from pydantic import BaseModel, Field
 # -----------------------------
 @tool
 def job_advice(question: str) -> str:
-    """Provides job-ready preparation advice based on the user's question."""
+    """
+    Provides job-ready preparation advice based on the user's question.
+    """
 
     information = {
-        "python": "Learn Python, OOP, DSA, and build projects with FastAPI or Django.",
-        "java": "Learn OOP, collections, JDBC, Spring Boot, and practice DSA.",
-        "dsa": "Focus on arrays, strings, stacks, queues, trees, graphs, and DP.",
-        "interview": "Prepare DSA, DBMS, OS, CN, projects, and behavioral questions.",
-        "resume": "Highlight projects, skills, internships, certifications, and GitHub."
+        "python": (
+            "Learn Python basics, OOP, data structures, algorithms, "
+            "and build projects using Flask, Django, Pandas, and APIs."
+        ),
+        "java": (
+            "Learn OOP, collections, exception handling, multithreading, "
+            "JDBC, Spring Boot, and practice DSA regularly."
+        ),
+        "dsa": (
+            "Focus on arrays, strings, hashing, stacks, queues, trees, "
+            "graphs, and dynamic programming."
+        ),
+        "interview": (
+            "Prepare DSA, DBMS, OS, CN, projects, resume explanation, "
+            "and behavioral interview questions."
+        ),
+        "resume": (
+            "Highlight projects, technical skills, internships, certifications, "
+            "GitHub links, and measurable achievements."
+        )
     }
 
     question_lower = question.lower()
@@ -32,7 +48,10 @@ def job_advice(question: str) -> str:
         if key in question_lower:
             return value
 
-    return "Focus on programming fundamentals, projects, GitHub, and communication skills."
+    return (
+        "Focus on programming fundamentals, DSA, projects, GitHub portfolio, "
+        "and communication skills to become job-ready."
+    )
 
 
 tools = [job_advice]
@@ -41,10 +60,10 @@ tools = [job_advice]
 # -----------------------------
 # 2. Initialize Model
 # -----------------------------
-GEMINI_API_KEY = os.environ.get("Gemini_API_Key")
+Gemini_API_Key = os.environ.get("Gemini_API_Key")
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemma-4-31b-it",
     google_api_key=Gemini_API_Key,
     temperature=0.3
 )
@@ -61,10 +80,24 @@ You are a Job-Ready Career Assistant.
 
 Rules:
 1. Give concise answers (3-8 lines).
-2. Suggest suitable job roles.
-3. Mention 1-2 next skills to learn.
-4. Do not give long explanations unless asked.
-5. End with one short suggestion.
+2. When the user asks about job roles after learning a skill, return only:
+   - Suitable job roles
+   - 1-2 important next skills to learn
+3. Do NOT give detailed explanations of each role unless the user explicitly asks.
+4. Use bullet points.
+5. End with one short suggestion such as "Start with a small project in this area."
+
+Example:
+User: What roles can I apply for after learning Python?
+Answer:
+- Python Developer
+- Backend Developer
+- Data Analyst
+- QA Automation Engineer
+- Junior AI/ML Engineer
+
+Next skills: SQL, Git/GitHub, and one framework (FastAPI/Django).
+Suggestion: Start with a small Python project and upload it to GitHub.
 """
 )
 
@@ -85,6 +118,7 @@ def format_for_agent(x) -> dict:
 
 
 def extract_text_response(agent_output: dict) -> str:
+    # Find messages
     messages = agent_output.get("messages")
 
     if messages is None:
@@ -99,6 +133,7 @@ def extract_text_response(agent_output: dict) -> str:
     last = messages[-1]
     content = getattr(last, "content", "")
 
+    # If content is a list, return only the text parts
     if isinstance(content, list):
         text_parts = []
         for item in content:
@@ -109,8 +144,7 @@ def extract_text_response(agent_output: dict) -> str:
         return "\n".join(text_parts)
 
     return str(content)
-
-
+# Build runnable chain
 formatted_agent_chain = (
     RunnableLambda(format_for_agent)
     | agent
@@ -121,20 +155,25 @@ formatted_agent_chain = (
 # -----------------------------
 # 6. FastAPI App
 # -----------------------------
+# -----------------------------
+# 6. FastAPI App + Simple UI
+# -----------------------------
+from fastapi.responses import HTMLResponse
+from fastapi import Request
+
 app = FastAPI(title="Job-Ready Career Assistant API")
 
+
+# LangServe API route
 add_routes(
     app,
     formatted_agent_chain,
     path="/agent",
-    playground_type="default",
-    enabled_endpoints=["invoke"]
+    playground_type="default"
 )
 
 
-# -----------------------------
-# 7. Simple Web UI
-# -----------------------------
+# Simple Web UI
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -144,77 +183,103 @@ HTML_PAGE = """
         body {
             font-family: Arial, sans-serif;
             background: #f4f6f8;
+            margin: 0;
             padding: 40px;
         }
-        .box {
+        .container {
             max-width: 700px;
             margin: auto;
             background: white;
             padding: 24px;
             border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
         }
         textarea {
             width: 100%;
             height: 120px;
             padding: 10px;
-            margin-top: 10px;
+            font-size: 16px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
         }
         button {
             margin-top: 12px;
-            padding: 10px 18px;
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            background: #2563eb;
+            color: white;
             cursor: pointer;
+        }
+        button:hover {
+            background: #1d4ed8;
         }
         #result {
             margin-top: 20px;
-            padding: 12px;
+            padding: 14px;
             background: #eef2ff;
-            white-space: pre-wrap;
             border-radius: 8px;
+            white-space: pre-wrap;
         }
     </style>
 </head>
 <body>
-<div class="box">
-    <h2>Job-Ready Career Assistant</h2>
+    <div class="container">
+        <h1>Job-Ready Career Assistant</h1>
+        <p>Ask about job roles, interview preparation, Python, Java, DSA, or resume guidance.</p>
 
-    <textarea id="question"
-        placeholder="Example: What roles can I apply for after learning Python?"></textarea><br>
+        <textarea id="question" placeholder="Example: What should I learn for a Java SDE interview?"></textarea>
+        <button onclick="askAgent()">Ask Assistant</button>
 
-    <button id="askBtn">Ask Assistant</button>
-
-    <div id="result">Your answer will appear here.</div>
-</div>
+        <div id="result">Your answer will appear here.</div>
+    </div>
+    <div id="suggestions"></div>
 
 <script>
-document.getElementById("askBtn").addEventListener("click", async function () {
-    const question = document.getElementById("question").value;
+async function askAgent(questionText=null) {
+    const question = questionText || document.getElementById("question").value;
 
-    if (!question.trim()) {
-        alert("Please enter a question");
-        return;
-    }
+    const response = await fetch("/ask", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ input: question })
+    });
 
-    document.getElementById("result").innerText = "Thinking...";
+    const data = await response.json();
+    document.getElementById("result").innerText = data.response;
 
-    try {
-        const response = await fetch("/ask", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ input: question })
-        });
+    // Simple suggestion buttons
+    const suggestions = [
+        "Give me a Python backend roadmap",
+        "Suggest a beginner Python project",
+        "What skills are needed for a Data Analyst role?"
+    ];
 
-        const data = await response.json();
-        document.getElementById("result").innerText =
-            data.response || "No response received.";
+    const container = document.getElementById("suggestions");
+    container.innerHTML = "<h3>You may also ask</h3>";
 
-    } catch (err) {
-        document.getElementById("result").innerText = "Error: " + err;
-    }
-});
+    suggestions.forEach(text => {
+        const btn = document.createElement("button");
+        btn.innerText = text;
+        btn.style.margin = "6px";
+        btn.onclick = () => {
+            document.getElementById("question").value = text;
+            askAgent(text);
+        };
+        container.appendChild(btn);
+    });
+
+}
 </script>
 </body>
 </html>
 """
+
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -223,17 +288,13 @@ async def home():
 
 @app.post("/ask")
 async def ask(request: Request):
-    try:
-        body = await request.json()
-        user_input = body.get("input", "")
+    body = await request.json()
 
-        result = formatted_agent_chain.invoke({"input": user_input})
+    result = formatted_agent_chain.invoke(
+        {"input": body.get("input", "")}
+    )
 
-        return {"response": result}
-
-    except Exception as e:
-        print("ERROR:", e)
-        return {"response": f"Server error: {str(e)}"}
+    return {"response": result}
 
 
 @app.get("/health")
@@ -241,8 +302,10 @@ def health():
     return {"status": "healthy"}
 
 
+
+
 # -----------------------------
-# 8. Run Server
+# 7. Run Server
 # -----------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
