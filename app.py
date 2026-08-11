@@ -1,312 +1,232 @@
 import os
-import uvicorn
-from fastapi import FastAPI
-from langserve import add_routes
+import tempfile
+import requests
 
+from fastapi import FastAPI, UploadFile, File, Form
+from langserve import add_routes
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableLambda
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_agent
-from langchain_core.runnables import RunnableLambda
-from pydantic import BaseModel, Field
+from pypdf import PdfReader
 
+# -------------------- LLM --------------------
 
-# -----------------------------
-# 1. Define Career Tool
-# -----------------------------
+MODEL_NAME = "models/gemini-3.5-flash-lite"
+
+# Render reads GOOGLE_API_KEY from Environment Variables
+llm = ChatGoogleGenerativeAI(model=MODEL_NAME)
+
+# -------------------- Tools --------------------
+
 @tool
-def job_advice(question: str) -> str:
-    """
-    Provides job-ready preparation advice based on the user's question.
-    """
+def job_search(role: str) -> str:
+    """Search for current job/internship postings for a role."""
+    from langchain_community.tools import DuckDuckGoSearchRun
 
-    information = {
-        "python": (
-            "Learn Python basics, OOP, data structures, algorithms, "
-            "and build projects using Flask, Django, Pandas, and APIs."
-        ),
-        "java": (
-            "Learn OOP, collections, exception handling, multithreading, "
-            "JDBC, Spring Boot, and practice DSA regularly."
-        ),
-        "dsa": (
-            "Focus on arrays, strings, hashing, stacks, queues, trees, "
-            "graphs, and dynamic programming."
-        ),
-        "interview": (
-            "Prepare DSA, DBMS, OS, CN, projects, resume explanation, "
-            "and behavioral interview questions."
-        ),
-        "resume": (
-            "Highlight projects, technical skills, internships, certifications, "
-            "GitHub links, and measurable achievements."
-        )
-    }
+    raw = DuckDuckGoSearchRun().run(
+        f"{role} job openings required skills site:linkedin.com OR site:naukri.com"
+    )
 
-    question_lower = question.lower()
+    prompt = f"""
+Extract from these job search snippets for "{role}":
 
-    for key, value in information.items():
-        if key in question_lower:
-            return value
+1. Top technical skills
+2. Common qualifications
+3. Nice-to-have skills
+
+Data:
+{raw}
+
+Return concise bullet points.
+"""
+
+    return llm.invoke(prompt).content
+
+
+@tool
+def skill_gap_analysis(resume_skills: str, market_skills: str) -> str:
+    """Compare resume skills with market skills."""
+
+    prompt = f"""
+STUDENT SKILLS:
+{resume_skills}
+
+MARKET SKILLS:
+{market_skills}
+
+Return:
+1. Matched Skills
+2. Critical Gaps
+3. Quick Wins
+4. Readiness Verdict
+"""
+
+    return llm.invoke(prompt).content
+
+
+@tool
+def recommend_projects(skill_gaps: str) -> str:
+    """Recommend projects for missing skills."""
+
+    prompt = f"""
+Skill gaps:
+{skill_gaps}
+
+Suggest exactly 4 projects with:
+- Title
+- Skills demonstrated
+- One-line scope
+- Estimated build time
+"""
+
+    return llm.invoke(prompt).content
+
+
+@tool
+def github_profile_check(github_username: str) -> str:
+    """Analyze a GitHub profile."""
+
+    headers = {}
+    token = os.getenv("GITHUB_TOKEN")
+
+    if token:
+        headers["Authorization"] = f"token {token}"
+
+    user_res = requests.get(
+        f"https://api.github.com/users/{github_username}",
+        headers=headers,
+    )
+
+    if user_res.status_code != 200:
+        return f"Could not fetch GitHub profile for '{github_username}'."
+
+    user = user_res.json()
+
+    repos_res = requests.get(
+        f"https://api.github.com/users/{github_username}/repos?sort=pushed&per_page=10",
+        headers=headers,
+    )
+
+    repos = repos_res.json() if repos_res.status_code == 200 else []
+
+    languages = {}
+    recently_active = 0
+
+    for r in repos:
+        lang = r.get("language")
+        if lang:
+            languages[lang] = languages.get(lang, 0) + 1
+
+        if r.get("pushed_at", "") >= "2025-01-01":
+            recently_active += 1
 
     return (
-        "Focus on programming fundamentals, DSA, projects, GitHub portfolio, "
-        "and communication skills to become job-ready."
+        f"GitHub: {github_username}\n"
+        f"Public repos: {user.get('public_repos')}\n"
+        f"Followers: {user.get('followers')}\n"
+        f"Bio: {user.get('bio') or 'None'}\n"
+        f"Top languages: {dict(sorted(languages.items(), key=lambda x: -x[1]))}\n"
+        f"Active repos since 2025: {recently_active}/{len(repos)}"
     )
 
+# -------------------- Agent --------------------
 
-tools = [job_advice]
+SYSTEM_PROMPT = """
+You are "PlacementPrep", an AI placement-readiness agent.
 
+Given resume skills, a target role, and a GitHub username:
 
-# -----------------------------
-# 2. Initialize Model
-# -----------------------------
-Gemini_API_Key = os.environ.get("Gemini_API_Key")
+1. Call job_search on the target role.
+2. Call skill_gap_analysis comparing resume skills to market skills.
+3. Call recommend_projects using the critical gaps.
+4. Call github_profile_check on the GitHub username.
+5. Write ONE final report with sections:
+   - Market Snapshot
+   - Skill Gap
+   - Recommended Projects
+   - GitHub Health
+   - Action Plan (Next 30 Days)
 
-llm = ChatGoogleGenerativeAI(
-    model="gemma-4-31b-it",
-    google_api_key=Gemini_API_Key,
-    temperature=0.3
-)
+Use clean Markdown formatting.
+Do not return tool traces or JSON.
+"""
 
-
-# -----------------------------
-# 3. Create Agent
-# -----------------------------
 agent = create_agent(
     model=llm,
-    tools=tools,
-    system_prompt="""
-You are a Job-Ready Career Assistant.
-
-Rules:
-1. Give concise answers (3-8 lines).
-2. When the user asks about job roles after learning a skill, return only:
-   - Suitable job roles
-   - 1-2 important next skills to learn
-3. Do NOT give detailed explanations of each role unless the user explicitly asks.
-4. Use bullet points.
-5. End with one short suggestion such as "Start with a small project in this area."
-
-Example:
-User: What roles can I apply for after learning Python?
-Answer:
-- Python Developer
-- Backend Developer
-- Data Analyst
-- QA Automation Engineer
-- Junior AI/ML Engineer
-
-Next skills: SQL, Git/GitHub, and one framework (FastAPI/Django).
-Suggestion: Start with a small Python project and upload it to GitHub.
-"""
+    tools=[
+        job_search,
+        skill_gap_analysis,
+        recommend_projects,
+        github_profile_check,
+    ],
+    system_prompt=SYSTEM_PROMPT,
 )
 
+def run_agent(input_data: dict) -> str:
+    result = agent.invoke(input_data)
+    final_message = result["messages"][-1].content
+    return str(final_message)
 
-# -----------------------------
-# 4. API Input Schema
-# -----------------------------
-class AgentInput(BaseModel):
-    input: str = Field(description="User query")
+clean_agent = RunnableLambda(run_agent)
 
+# -------------------- FastAPI --------------------
 
-# -----------------------------
-# 5. Helper Functions
-# -----------------------------
-def format_for_agent(x) -> dict:
-    user_input = x["input"] if isinstance(x, dict) else x.input
-    return {"messages": [("user", user_input)]}
-
-
-def extract_text_response(agent_output: dict) -> str:
-    # Find messages
-    messages = agent_output.get("messages")
-
-    if messages is None:
-        for value in agent_output.values():
-            if isinstance(value, dict) and "messages" in value:
-                messages = value["messages"]
-                break
-
-    if not messages:
-        return str(agent_output)
-
-    last = messages[-1]
-    content = getattr(last, "content", "")
-
-    # If content is a list, return only the text parts
-    if isinstance(content, list):
-        text_parts = []
-        for item in content:
-            if isinstance(item, dict) and item.get("type") == "text":
-                text_parts.append(item.get("text", ""))
-            elif isinstance(item, str):
-                text_parts.append(item)
-        return "\n".join(text_parts)
-
-    return str(content)
-# Build runnable chain
-formatted_agent_chain = (
-    RunnableLambda(format_for_agent)
-    | agent
-    | RunnableLambda(extract_text_response)
-).with_types(input_type=AgentInput, output_type=str)
-
-
-# -----------------------------
-# 6. FastAPI App
-# -----------------------------
-# -----------------------------
-# 6. FastAPI App + Simple UI
-# -----------------------------
-from fastapi.responses import HTMLResponse
-from fastapi import Request
-
-app = FastAPI(title="Job-Ready Career Assistant API")
-
-
-# LangServe API route
-add_routes(
-    app,
-    formatted_agent_chain,
-    path="/agent",
-    playground_type="default"
+app = FastAPI(
+    title="Placement-Ready AI Agent",
+    version="1.0",
 )
 
+add_routes(app, clean_agent, path="/agent")
 
-# Simple Web UI
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Job-Ready Career Assistant</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f6f8;
-            margin: 0;
-            padding: 40px;
-        }
-        .container {
-            max-width: 700px;
-            margin: auto;
-            background: white;
-            padding: 24px;
-            border-radius: 12px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            text-align: center;
-        }
-        textarea {
-            width: 100%;
-            height: 120px;
-            padding: 10px;
-            font-size: 16px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-        }
-        button {
-            margin-top: 12px;
-            width: 100%;
-            padding: 12px;
-            font-size: 16px;
-            border: none;
-            border-radius: 8px;
-            background: #2563eb;
-            color: white;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #1d4ed8;
-        }
-        #result {
-            margin-top: 20px;
-            padding: 14px;
-            background: #eef2ff;
-            border-radius: 8px;
-            white-space: pre-wrap;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Job-Ready Career Assistant</h1>
-        <p>Ask about job roles, interview preparation, Python, Java, DSA, or resume guidance.</p>
+@app.get("/")
+def root():
+    return {"message": "Placement-Ready AI Agent is running!"}
 
-        <textarea id="question" placeholder="Example: What should I learn for a Java SDE interview?"></textarea>
-        <button onclick="askAgent()">Ask Assistant</button>
+@app.post("/analyze")
+async def analyze(
+    resume: UploadFile = File(...),
+    role: str = Form(...),
+    github_username: str = Form(...),
+):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(await resume.read())
+        tmp_path = tmp.name
 
-        <div id="result">Your answer will appear here.</div>
-    </div>
-    <div id="suggestions"></div>
+    reader = PdfReader(tmp_path)
+    text = "".join(p.extract_text() or "" for p in reader.pages)
 
-<script>
-async function askAgent(questionText=null) {
-    const question = questionText || document.getElementById("question").value;
+    os.unlink(tmp_path)
 
-    const response = await fetch("/ask", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ input: question })
-    });
+    skills_prompt = f"""
+Extract ONLY technical skills as a comma-separated list.
 
-    const data = await response.json();
-    document.getElementById("result").innerText = data.response;
-
-    // Simple suggestion buttons
-    const suggestions = [
-        "Give me a Python backend roadmap",
-        "Suggest a beginner Python project",
-        "What skills are needed for a Data Analyst role?"
-    ];
-
-    const container = document.getElementById("suggestions");
-    container.innerHTML = "<h3>You may also ask</h3>";
-
-    suggestions.forEach(text => {
-        const btn = document.createElement("button");
-        btn.innerText = text;
-        btn.style.margin = "6px";
-        btn.onclick = () => {
-            document.getElementById("question").value = text;
-            askAgent(text);
-        };
-        container.appendChild(btn);
-    });
-
-}
-</script>
-</body>
-</html>
+Resume text:
+{text[:6000]}
 """
 
+    response = llm.invoke(skills_prompt)
+    resume_skills = str(response.content).strip()
 
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    return HTML_PAGE
+    user_input = f"""
+Target role: {role}
+Resume skills: {resume_skills}
+GitHub username: {github_username}
 
+Run the full placement-readiness analysis.
+"""
 
-@app.post("/ask")
-async def ask(request: Request):
-    body = await request.json()
+    final_message = clean_agent.invoke({
+        "messages": [{"role": "user", "content": user_input}]
+    })
 
-    result = formatted_agent_chain.invoke(
-        {"input": body.get("input", "")}
-    )
+    return {
+        "resume_skills": resume_skills,
+        "report": final_message,
+    }
 
-    return {"response": result}
-
-
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
-
-
-
-
-# -----------------------------
-# 7. Run Server
-# -----------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    import uvicorn
+
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("app:app", host="0.0.0.0", port=port)
